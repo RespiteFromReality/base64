@@ -1,0 +1,7 @@
+.{
+    .name = .base64,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{"src/,"},
+    .fingerprint = 0xcf9232769447be6d,
+}
