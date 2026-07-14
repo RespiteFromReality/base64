@@ -3,9 +3,7 @@ const std = @import("std");
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
-    var memory_buffer: [1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&memory_buffer);
-    const allocator = fba.allocator();
+    const arena: std.mem.Allocator = init.arena.allocator();
 
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
@@ -14,8 +12,8 @@ pub fn main(init: std.process.Init) !void {
     const base64 = Base64.init();
     const text = "Testing some more stuff";
     const b64 = "VGVzdGluZyBzb21lIG1vcmUgc3R1ZmY=";
-    const encoded_text = try base64.encode(allocator, text);
-    const decoded_text = try base64.decode(allocator, b64);
+    const encoded_text = try base64.encode(arena, text);
+    const decoded_text = try base64.decode(arena, b64);
     try stdout.print("Encoded text: {s}\n", .{encoded_text});
     try stdout.print("Decoded text: {s}\n", .{decoded_text});
     try stdout.flush();
@@ -33,10 +31,6 @@ const Base64 = struct {
         };
     }
 
-    pub fn charAt(self: Base64, index: usize) u8 {
-        return self._table[index];
-    }
-
     pub fn encode(self: Base64, alloc: std.mem.Allocator, input: []const u8) ![]u8 {
         if (input.len == 0) {
             return "";
@@ -44,64 +38,65 @@ const Base64 = struct {
 
         const length = try calcEncodeLength(input);
         var base64 = try alloc.alloc(u8, length);
+        var pos: usize = 0;
+
         var buf = [3]u8{ 0, 0, 0 };
-        var count: u8 = 0;
-        var pos: u64 = 0;
+        var b: usize = 0;
 
         for (input) |char| {
-            buf[count] = char;
-            count += 1;
+            buf[b] = char;
+            b += 1;
 
-            if (count == 3) {
-                base64[pos] = self.charAt(buf[0] >> 2);
-                base64[pos + 1] = self.charAt(((buf[0] & 0x03) << 4) + (buf[1] >> 4));
-                base64[pos + 2] = self.charAt(((buf[1] & 0x0f) << 2) + (buf[2] >> 6));
-                base64[pos + 3] = self.charAt(buf[2] & 0x3f);
+            if (b == 3) {
+                base64[pos] = self.charAt(buf[0] >> 0b10);
+                base64[pos + 1] = self.charAt(((buf[0] & 0b11) << 0b100) + (buf[1] >> 0b100));
+                base64[pos + 2] = self.charAt(((buf[1] & 0b1111) << 0b10) + (buf[2] >> 0b110));
+                base64[pos + 3] = self.charAt(buf[2] & 0b111111);
                 pos += 4;
-                count = 0;
+                b = 0;
             }
         }
 
-        if (count == 1) {
-            base64[pos] = self.charAt(buf[0] >> 2);
-            base64[pos + 1] = self.charAt((buf[0] & 0x03) << 4);
-            base64[pos + 2] = '=';
+        if (b > 0) {
+            base64[pos] = self.charAt(buf[0] >> 0b10);
+            base64[pos + 1] = self.charAt(((buf[0] & 0b11) << 0b100) + (buf[1] >> 0b100));
+            switch (b) {
+                1 => base64[pos + 2] = '=',
+                2 => base64[pos + 2] = self.charAt((buf[1] & 0b1111) << 0b10),
+                else => unreachable,
+            }
             base64[pos + 3] = '=';
-        }
-
-        if (count == 2) {
-            base64[pos] = self.charAt(buf[0] >> 2);
-            base64[pos + 1] = self.charAt(((buf[0] & 0x03) << 4) + (buf[1] >> 4));
-            base64[pos + 2] = self.charAt((buf[1] & 0x0f) << 2);
-            base64[pos + 3] = '=';
-            pos += 4;
         }
 
         return base64;
     }
+
     pub fn decode(self: Base64, allocator: std.mem.Allocator, base64: []const u8) ![]u8 {
         if (base64.len == 0) {
             return "";
         }
+
         const length = try calcDecodeLength(base64);
         var output = try allocator.alloc(u8, length);
-        var count: u8 = 0;
-        var pos: u64 = 0;
+        var pos: usize = 0;
+
         var buf = [4]u8{ 0, 0, 0, 0 };
+        var b: usize = 0;
 
         for (0..base64.len) |i| {
-            buf[count] = self.charIndex(base64[i]);
-            count += 1;
-            if (count == 4) {
-                output[pos] = (buf[0] << 2) + (buf[1] >> 4);
-                if (buf[2] != 64) {
-                    output[pos + 1] = (buf[1] << 4) + (buf[2] >> 2);
+            buf[b] = self.charIndex(base64[i]);
+            b += 1;
+
+            if (b == 4) {
+                output[pos] = (buf[0] << 0b10) + (buf[1] >> 0b100);
+                if (buf[2] != 0b1000000) {
+                    output[pos + 1] = (buf[1] << 0b100) + (buf[2] >> 0b10);
                 }
-                if (buf[3] != 64) {
-                    output[pos + 2] = (buf[2] << 6) + buf[3];
+                if (buf[3] != 0b1000000) {
+                    output[pos + 2] = (buf[2] << 0b110) + buf[3];
                 }
                 pos += 3;
-                count = 0;
+                b = 0;
             }
         }
 
@@ -114,6 +109,10 @@ const Base64 = struct {
         }
         const groups: usize = try std.math.divCeil(usize, input.len, 3);
         return groups * 4;
+    }
+
+    fn charAt(self: Base64, index: usize) u8 {
+        return self._table[index];
     }
 
     fn calcDecodeLength(input: []const u8) !usize {
