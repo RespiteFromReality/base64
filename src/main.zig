@@ -14,13 +14,17 @@ pub fn main(init: std.process.Init) !void {
     // Args
     var mode: Mode = .unset;
     const args = try init.minimal.args.toSlice(arena);
+    if (args.len < 2) return;
     if (std.mem.startsWith(u8, args[1], "-e") or std.mem.startsWith(u8, args[1], "--encode")) {
         mode = .encode;
     } else if (std.mem.startsWith(u8, args[1], "-d") or std.mem.startsWith(u8, args[1], "--decode")) {
         mode = .decode;
+    } else {
+        std.debug.print("No mode provided. \nPass -e to encode or -d to decode base64.", .{});
+        return;
     }
-    const input: []const u8 = args[2];
 
+    const input: []const u8 = args[2];
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_file_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout = &stdout_file_writer.interface;
